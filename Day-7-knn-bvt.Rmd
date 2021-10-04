@@ -1,0 +1,259 @@
+```{r 07_setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, eval=FALSE)
+```
+
+# (PART) Regression: Building Flexible Models {-}
+
+# KNN Regression and the Bias-Variance Tradeoff
+
+## Learning Goals {-}
+
+- Clearly describe / implement by hand the KNN algorithm for making a regression prediction
+- Explain how the number of neighbors relates to the bias-variance tradeoff
+- Explain the difference between parametric and nonparametric methods
+- Explain how the curse of dimensionality relates to the performance of KNN
+
+<br>
+
+Slides from today are available [here](https://docs.google.com/presentation/d/1XyVFAy5t0jb-hDi6gXmx3z1_WTAqe_F4rYOskSVvoLo/edit?usp=sharing).
+
+
+
+<br><br><br>
+
+
+
+## KNN models in `tidymodels` {-}
+
+To build KNN models in `tidymodels`, first load the package and set the seed for the random number generator to ensure reproducible results:
+
+```{r}
+library(dplyr)
+library(readr)
+library(broom)
+library(ggplot2)
+library(tidymodels) 
+tidymodels_prefer() # Resolves conflicts, prefers tidymodel functions
+set.seed(___) # Pick your favorite number to fill in the parentheses
+```
+
+Then adapt the following code:
+
+```{r}
+# CV Folds
+data_cv10 <- vfold_cv(___, v = 10)
+
+# Model Specification
+knn_spec <- 
+  nearest_neighbor() %>% # new type of model!
+  set_args(neighbors = tune()) %>% # tuning parameter is neighbor; tuning spec
+  set_engine(engine = 'kknn') %>% # new engine
+  set_mode('regression') 
+
+# Recipe with standardization (!)
+data_rec <- recipe( ___ ~ ___ , data = ___) %>%
+    step_nzv(all_predictors()) %>% # removes variables with the same value
+    step_novel(all_nominal_predictors()) %>% # important if you have rare categorical variables 
+    step_normalize(all_numeric_predictors()) %>%  # important standardization step for KNN
+    step_dummy(all_nominal_predictors())  # creates indicator variables for categorical variables (important for KNN!)
+
+# Workflow (Recipe + Model)
+knn_wf <- workflow() %>%
+  add_model(knn_spec) %>% 
+  add_recipe(data_rec)
+
+# Tune model trying a variety of values for neighbors (using 10-fold CV)
+penalty_grid <- grid_regular(
+  neighbors(range = c(1, 50)), #  min and max of values for neighbors
+  levels = 50) # number of neighbors values
+
+knn_fit_cv <- tune_grid(knn_wf, # workflow
+              resamples = data_cv10, #CV folds
+              grid = penalty_grid, # grid specified above
+              metrics = metric_set(rmse, mae))
+
+
+```
+
+
+<br>
+
+Note:  `tidymodels` defines neighbors as the cases that are the closest in terms of the Euclidean distance of the predictor values.
+
+$$
+d(case_i,case_j) = \sqrt{(x_{i1} - x_{j1})^2 + \cdots +(x_{ip} - x_{jp})^2 }
+$$
+
+
+<br>
+
+**Identifying the "best" KNN model**
+
+The "best" model in the sequence of models fit is defined relative to the chosen `metric` and the choice of `select_best` or `select_by_one_std_err()`.
+
+```{r}
+knn_fit_cv %>% autoplot() # Visualize Trained Model using CV
+
+knn_fit_cv %>% show_best(metric = 'mae') # Show evaluation metrics for different values of neighbors, ordered
+
+# Choose value of Tuning Parameter (neighbors)
+tuned_knn_wf <- knn_fit_cv %>% 
+  select_by_one_std_err(metric = 'mae',desc(neighbors)) %>%  # Choose neighbors value that leads to the highest neighbors within 1 se of the lowest CV MAE
+  finalize_workflow(knn_wf, .)
+
+# Fit final KNN model to data
+knn_fit_final <- tuned_knn_wf %>%
+  fit(data = __) 
+
+# Use the best model to make predictions
+# new_data should be a data.frame with required predictors
+predict(knn_fit_final, new_data = ___)
+```
+
+
+
+<br><br><br>
+
+
+
+## Exercises {-}
+
+**You can download a template RMarkdown file to start from [here](template_rmds/07-knn-bvt.Rmd).**
+
+We'll explore KNN regression using the `College` dataset in the `ISLR` package (install it with `install.packages("ISLR")` in the Console). You can use `?College` in the Console to look at the data codebook.
+
+```{r}
+library(ISLR)
+library(dplyr)
+library(readr)
+library(broom)
+library(ggplot2)
+library(tidymodels) 
+tidymodels_prefer() # Resolves conflicts, prefers tidymodel functions
+
+
+data(College)
+
+# data cleaning
+college_clean <- College %>% 
+    mutate(school = rownames(College)) %>% # creates variable with school name
+    filter(Grad.Rate <= 100) # Remove one school with grad rate of 118%
+rownames(college_clean) <- NULL # Remove school names as row names
+```
+
+
+### Hello, how are things? {-}
+
+Spend a few minutes chatting about life - how are you feeling? What's on your mind?
+
+
+### Exercise 1: Bias-variance tradeoff warmup {-}
+
+a. Think back to the LASSO algorithm which depends upon tuning parameter $\lambda$.
+    - For which values of $\lambda$ (small or large) will LASSO be the most biased, and why?
+    
+High lambda leads to high bias because a low lambda will leave a lot of variables out of the dataset making it less accurate to the dataset 
+    
+    - For which values of $\lambda$ (small or large) will LASSO be the most variable, and why?
+
+Low lambda will make the data the most variable because more predictors will be used in the model making it more likely to need to be changed if tested on another dataset
+
+b. The bias-variance tradeoff also comes into play when comparing across algorithms, not just within algorithms. Consider LASSO vs. least squares:
+    - Which will tend to be more biased?
+    - Which will tend to be more variable?
+    - When will LASSO outperform least squares in the bias-variance tradeoff?
+
+
+### Exercise 2: Impact of variable scale and distance measure {-}
+
+Consider the 1-nearest neighbor algorithm to predict `Grad.Rate` on the basis of two predictors: `Apps` and `Private`. Let `Yes` for `Private` be represented with the value 1 and `No` with 0.
+
+a. We have a test case whose number of applications is 13,530 and is a private school. Suppose that we have the tiny 2-case training set below. What would the 1-nearest neighbor prediction be using Euclidean distance?
+
+```{r}
+college_clean %>%
+    filter(school %in% c("Princeton University", "SUNY at Albany")) %>%
+    select(Apps, Private, Grad.Rate, school)
+
+sqrt( (13530 - 13528)^2 + (1 - 0)^2) # Euclidean distance
+```
+
+b. Do you have any concerns about the resulting prediction? Based on this, comment on the impact of variable scaling and the distance measure on KNN performance. How might you change the distance calculation (or correspondingly rescale the data) to generate a more sensible prediction in this situation?
+
+Since the data is not standardized it heavily weights towards the aplication data even though that is not necessarily true in real life where the difference between being provate or public is important.
+
+### Exercise 3: Implementing KNN in `tidymodels` {-}
+
+Adapt our general KNN code to "fit" a set of KNN models to predict `Grad.Rate` with the following specifications:
+
+- Use the predictors `Private`, `Top10perc` (% of new students from top 10% of high school class), and `S.F.Ratio` (student/faculty ratio).
+- Use 8-fold CV. (Why 8? Take a look at the sample size.)
+- Use mean absolute error (MAE) to select a final model.
+- Select the simplest model for which the metric is within one standard error of the best metric.
+- Use a sequence of neighbor values from 1 to 100 in increments of 5 (20 values in total).
+
+
+After adapting the code (but before inspecting any output), answer the following conceptual questions:
+
+- Explain your choice for your recipe.
+- Why is "fit" in quotes? Does KNN actually fit a model as part of training? (This feature of KNN is known as "lazy learning".)
+- How is test MAE estimated? What are the steps of the KNN algorithm with cross-validation?
+- Draw a picture of how you expect test MAE to vary with $K$, the number of neighbors. In terms of the bias-variance tradeoff, why do you expect the plot to look this way?
+
+```{r}
+set.seed(2021)
+
+# CV Folds
+college_cv8 <- vfold_cv(College, v = 8)
+
+# Recipe with standardization (!)
+college_rec <- recipe( Grad.Rate ~ Top10perc + Private + S.F.Ratio, data = College) %>%
+    step_nzv(all_predictors()) %>% # removes variables with the same value
+    step_novel(all_nominal_predictors()) %>% # important if you have rare categorical variables 
+    step_normalize(all_numeric_predictors()) %>%  # important standardization step for KNN
+    step_dummy(all_nominal_predictors())  # creates indicator variables for categorical variables (important for KNN!)
+
+# Model Specification
+knn_spec <- 
+  nearest_neighbor() %>% # new type of model!
+  set_args(neighbors = tune()) %>% # tuning parameter is neighbor; tuning spec
+  set_engine(engine = 'kknn') %>% # new engine
+  set_mode('regression') 
+
+# Workflow (Recipe + Model)
+college_wf <- workflow() %>%
+  add_model(knn_spec) %>% 
+  add_recipe(college_rec)
+
+# Tune model trying a variety of values for neighbors (using 10-fold CV)
+penalty_grid <- grid_regular(
+  neighbors(range = c(1, 100)), #  min and max of values for neighbors
+  levels = 20) # number of neighbors values
+
+knn_fit_cv <- tune_grid(college_wf, # workflow
+              resamples = college_cv8, #CV folds
+              grid = penalty_grid, # grid specified above
+              metrics = metric_set( mae))
+
+knn_fit_cv %>% autoplot() # Visualize Trained Model using CV
+knn_fit_cv %>% show_best(metric = 'mae') # Show evaluation metrics for different values of neighbors, ordered
+
+# Choose value of Tuning Parameter (neighbors)
+knn_fit_cv %>%
+  select_by_one_std_err(metric = 'mae',desc(neighbors)) # Choose neighbors value that leads to the highest neighbors within 1 se of the lowest CV MAE
+```
+
+### Exercise 4: Inspecting the results {-}
+
+- Use `autoplot()` to verify your expectations about the plot of test MAE vs. $K$, the number of neighbors.
+- Contextually interpret the test MAE.
+- How else could you evaluate the KNN model?
+- Does your KNN model help you understand which predictors of graduation rate are most important? Why or why not?
+
+
+### Exercise 5: Curse of dimensionality {-}
+
+Just as with parametric models, we could keep going and add more and more predictors. However, the KNN algorithm is known to suffer from the "curse of dimensionality". Why? **Hint:** First do a quick Google search of this new idea.
+
+
+

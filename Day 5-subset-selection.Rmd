@@ -1,0 +1,152 @@
+```{r 05_setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, eval=FALSE)
+```
+
+# (PART) Regression: Building Models {-}
+
+# Variable Subset Selection
+
+## Learning Goals {-}
+
+- Clearly describe the forward and backward stepwise selection algorithm and why they are examples of greedy algorithms
+- Compare best subset and stepwise algorithms in terms of optimality of output and computational time
+- Describe how selection algorithms can give a measure of *variable importance*
+
+<br>
+
+Slides from today are available [here](https://docs.google.com/presentation/d/1JlG8pOTx7qtLb9smbPjP4ETysLmSg1-k7E8iFJ89ip0/edit?usp=sharing).
+
+<br><br><br>
+
+## Writing Good Sentences Part 2 {-}
+
+Look through 6 different revisions of the first sentence from Tuesday. Which one do you prefer? Why? What features of that sentence make it clear, straightforward, and accessible?
+
+1. The number of lines in an email differentiates spam emails from useful emails. A variable shows that spam emails almost never contain "Re:" in the subject line. We selected 10 logical variables as potential indicators of spam status and ordered them in three sections:
+- Subject line: contains "Re:", contains spam words
+- Body content: is original message, contains "Dear," 
+- Header/email specifications: message ID does not contain host name, contains images, is PGP signed, contains "Reply to:"
+
+2. Spam email differs from non-spam ones in terms of numbers of lines. Also, spam emails almost never contain "Re" in the subject. We select 10 logical variables out of 16 potential indications and categorize them into these three sections: 
+- Related to the subject line
+- Related to the body content
+- Related to the header/email specifications
+
+3. Indicators such as the number of lines in an email body and whether or not the subject contains "Re:" can help distinguish between spam and useful emails. Of 16 potential indicators, 10 were selected and split into three sections: relation to subject line, relation to body content, and relation to header/email specifications.
+
+4. The number of lines in an email body and the presence of  "Re:" in the email subject line can distinguish spam emails from useful emails. Spam emails almost never contain "Re:" and useful emails have more lines. Out of 16 potential indicators of spam status,10 were chosen and categorized as follows: 
+- Related to the subject line: isRE, subjectSpamWords
+- Related to the body content: isOriginalMessage, isDear, isWrote
+- Related to the header/email specifications: messageIdHasNoHostname, containsImages, fromNumericEnd, isPGPsigned, IsInReplyTo
+
+5. The number of lines in an email body shows differences between spam emails and useful emails. Additionally, when an email in the data set is spam, it almost never contains "Re:". Of these 10 logical indicators of spam status that were selected from the list of 16, they were ordered into our 3 general sections:
+- Related to the subject line: isRE, subjectSpamWords
+- Related to the body content: isOriginalMessage, isDear, isWrote
+- Related to the header/email specifications: messageIdHasNoHostname, containsImages, fromNumericEnd, isPGPsigned, IsInReplyTo
+We believe these sections can be useful in later model interpretation. 
+
+6. The number of lines in an email body helps distinguish between spam emails and useful emails. If an email has "Re:" in the email subject, it almost never is a spam email. We sorted 10 indicators of spam status into 3 general sections: 
+- Subject line
+- Body content
+- Header/email specifications 
+
+
+
+
+
+## Exercises {-}
+
+**You can download a template RMarkdown file to start from [here](template_rmds/05-subset-selection.Rmd).**
+
+We'll continue using the body fat dataset to explore subset selection methods.
+
+```{r}
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(tidymodels)
+tidymodels_prefer()
+
+bodyfat_train <- read_csv("https://www.dropbox.com/s/js2gxnazybokbzh/bodyfat_train.csv?dl=1")
+
+# Remove the fatBrozek and density variables
+bodyfat_train <- bodyfat_train %>%
+    select(-fatBrozek, -density, -hipin)
+```
+
+
+### Exercise 1: Backward stepwise selection: by hand {-}
+
+In the backward stepwise procedure, we start with the full model, `full_model`, with *all* predictors:
+
+```{r}
+lm_spec <-
+    linear_reg() %>% 
+    set_engine(engine = 'lm') %>% 
+    set_mode('regression')
+
+full_model <- fit(lm_spec,
+            fatSiri ~ .,
+            data = bodyfat_train) 
+
+full_model %>% tidy() %>% arrange(desc(p.value))
+```
+
+To practice the backward selection algorithm, step through a few steps of the algorithm using p-values as a selection criterion:
+
+- Identify which predictor contributes the *least* to the model. One (problematic) approach is to identify the least significant predictor (the one with the largest p-value).
+
+- Fit a new model which eliminates this predictor.
+
+- Identify the least significant predictor in this model.    
+
+- Fit a new model which eliminates this predictor.
+
+- Repeat 1 more time to get the hang of it.
+
+(We discussed in the video how the use of p-values for selection is problematic, but for now you're just getting a handle on the algorithm. You'll think about the problems with p-values in the next exercise.)
+
+```{r}
+full_modelBS1 <- fit(lm_spec,
+            fatSiri ~ . - hip,
+            data = bodyfat_train) 
+
+full_modelBS1 %>% tidy() %>% arrange(desc(p.value))
+```
+```{r}
+full_modelBS2 <- fit(lm_spec,
+            fatSiri ~ .- hip - chest,
+            data = bodyfat_train) 
+
+full_modelBS2 %>% tidy() %>% arrange(desc(p.value))
+```
+
+### Exercise 2: Interpreting the results {-}
+
+Examine which predictors remain after the previous exercise. 
+
+a. Are you surprised that, for example, `wrist` is still in the model but `hip` is not? Does this mean that `wrist` is a better predictor of body fat percentage than `hip` is? What statistical idea is relevant here?
+
+It does not necessarily tell us that hip is worse than wrist because what it tells us is that when all the other variables are included, hip makes less of a contribution to the model's accuracy than wrist does.
+
+b. How would you determine which variables are the most important in predicting the outcome using the backwards algorithm? How about with forward selection?
+
+With forwards and backwards selection you are using p values to determine their accuracy, whichever one is highest being the worst contributor, but it is still ambiguous whether this actually means the variable is better or worse.
+
+### Exercise 3: Planning forward selection using CV {-}
+
+Using p-values to perform stepwise selection presents some problems, as was discussed in the concept video. A better alternative to target predictive accuracy is to evaluate the models using **cross-validation**.
+
+**Computational Thinking Exercise**: Fully outline the steps required to use cross-validation to perform **forward** selection. Make sure to provide enough detail such that the stepwise selection and CV algorithms are made clear and could be implemented (no code, just describing the steps).
+
+To do cross validation for forward selection, you would separate the data into groups for round 1 and pull one group out. You would then run models for each variable that is produced by the remaining groups against the pulled out group to get a RMSE for each variable. You would then do that over and over again until each group have been pulled out and tested against giving a bunch of RMSE values for each variable that would be averaged. The variable with the lowest RMSE gets added into the model. Then you would do this whole process over again with the remaining variables, once again getting a bunch of RMSE for each variable that are averaged and once again adding the  variable with the lowest RMSE to be the second model. This process would continue, creating models with one variable added at a time until you have a model with each number of variables possible.
+
+
+### Exercise 4: Approaches to variable subset selection {-}
+
+Forward and backward selection provide computational shortcuts to the **all subsets** approach that we did at the end of day 1 (fitting all possible models with all combination of variables).  Imagine updating that code (that ran for about 15-20 minutes) to complete CV on each of those models instead of calculating the training MAE. 
+
+The `tidymodels` package does not include a straightforward way to implement forward or backward selection as the authors of the package do not believe that it is a good technique for variable selection (there are better approaches). **List out some reasons why these algorithms may not be encouraged for selecting which variables should be in the model. Consider if we have hundreds of variables, some of which may be redundant or collinear.** 
+
+This approach is not necessarily accurate because it assumes a lot. For example two variables that may be too similar and should therefore have one removed and one in would both be added or removed around the same times because their p-values would be similar. Along with that, when looking at a p-value of a variable, it is affected by the fact that other variables are also in the model so a variable may have a larger impact and be more telling in truth, but because certain other variables are involved it no longer does. Finally this process does not account for 
+

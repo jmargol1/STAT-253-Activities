@@ -1,0 +1,441 @@
+```{r 06_setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, eval=FALSE)
+```
+
+# LASSO: Shrinkage/Regularization
+
+## Learning Goals {-}
+
+- Explain how ordinary and penalized least squares are similar and different with regard to (1) the form of the objective function and (2) the goal of variable selection
+- Explain why variable scaling is important for the performance of shrinkage methods
+- Explain how the lambda tuning parameter affects model performance and how this is related to overfitting
+- Describe how output from LASSO models can give a measure of *variable importance*
+
+<br>
+
+Slides from today are available [here](https://docs.google.com/presentation/d/12JJkaWgK-SDp3Hh2dOAnPqmND8TmAYdYlvdRFqtmz7A/edit?usp=sharing).
+
+<br><br><br>
+
+## LASSO in Theory {-}
+
+In ordinary least squares (OLS; the `lm` engine), the estimated coefficients, $\hat{\beta_1}, \hat{\beta_2}..., \hat{\beta_p}$, are those that minimize the sum of squared residuals:
+
+$$
+RSS = \sum_{i = 1}^n \Big[y_i - \big(\beta_0 + \beta_1 x_{i1} + ... + \beta_p x_{ip} \big) \Big]^2 = \sum_{i = 1}^n \Big(y_i - \beta_0 - \sum_{j=1}^p \beta_j x_{ij} \Big)^2.
+$$
+LASSO (the `glmnet` engine) finds $\hat{\beta_1}, \hat{\beta_2}..., \hat{\beta_p}$ by minimizing: 
+
+$$
+\begin{align}
+\sum_{i = 1}^n \Big(y_i - \beta_0 - \sum_{j=1}^p \beta_j x_{ij} \Big)^2 & + \lambda \sum_{j=1}^p |\beta_j|,  \text{  where } \lambda\ge 0 \\
+\text{RSS} \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \  & + \ \ \text{penalty}
+\end{align}
+$$
+**What should $\lambda$ be?**
+
+- when $\lambda = 0$, LASSO = OLS estimates and all coefficients are included in the model 
+- when $\lambda = \infty$  all coefficients are 0 and we get a model with only an intercept  
+- choose $\lambda$ so some of the coefficients will shrink to zero. How? Use cross-validation!  
+- Because we are penalizing coefficients, it is important that we put our variables on the same scale so that coefficients are being penalized fairly.  If we didn't do this, variables that are measured on larger scales would be penalized more than those measured on smaller scales. For example, the same variable measured in pounds would be penalized more than if it were measured in ounces.  
+
+
+
+
+
+## LASSO models in `tidymodels` {-}
+
+To build LASSO models in `tidymodels`, first load the package and set the seed for the random number generator to ensure reproducible results:
+
+```{r}
+library(dplyr)
+library(readr)
+library(broom)
+library(ggplot2)
+library(tidymodels) 
+tidymodels_prefer() # Resolves conflicts, prefers tidymodel functions
+set.seed(___) # Pick your favorite number to fill in the parentheses
+```
+
+Then adapt the following code to fit a Lasso Model to a data set:
+
+```{r}
+# Lasso Model Spec
+lm_lasso_spec <- 
+  linear_reg() %>%
+  set_args(mixture = 1, penalty = 0) %>% ## mixture = 1 indicates Lasso, we'll choose penalty later
+  set_engine(engine = 'glmnet') %>% #note we are using a different engine
+  set_mode('regression') 
+
+# Recipe with standardization (!)
+data_rec <- recipe( ___ ~ ___ , data = ___) %>%
+    step_nzv(all_predictors()) %>% # removes variables with the same value
+    step_novel(all_nominal_predictors()) %>% # important if you have rare categorical variables 
+    step_normalize(all_numeric_predictors()) %>%  # important standardization step for LASSO
+    step_dummy(all_nominal_predictors())  # creates indicator variables for categorical variables
+
+# Workflow (Recipe + Model)
+lasso_wf <- workflow() %>% 
+  add_recipe(data_rec) %>%
+  add_model(lm_lasso_spec)
+
+# Fit Model
+lasso_fit <- lasso_wf %>% 
+  fit(data = ___) # Fit to data
+```
+
+**Examining the LASSO model for each $\lambda$**
+
+The `glmnet` engine fits models for each $\lambda$ automatically, so we can visualize the estimates for each penalty value.
+
+```{r}
+plot(lasso_fit %>% extract_fit_parsnip() %>% pluck('fit'), # way to get the original glmnet output
+     xvar = "lambda") # glmnet fits the model with a variety of lambda penalty values
+```
+
+**Identifying the "best" LASSO model**
+
+To identify the best model, we need to tune the model using cross validation. Adapt the following code to tune a Lasso Model to choose Lambda:
+
+```{r}
+# Create CV folds
+data_cv10 <- vfold_cv(___, v = 10)
+
+# Lasso Model Spec with tune
+lm_lasso_spec_tune <- 
+  linear_reg() %>%
+  set_args(mixture = 1, penalty = tune()) %>% ## mixture = 1 indicates Lasso
+  set_engine(engine = 'glmnet') %>% #note we are using a different engine
+  set_mode('regression') 
+
+# Workflow (Recipe + Model)
+lasso_wf_tune <- workflow() %>% 
+  add_recipe(data_rec) %>%
+  add_model(lm_lasso_spec_tune) 
+
+# Tune Model (trying a variety of values of Lambda penalty)
+penalty_grid <- grid_regular(
+  penalty(range = c(-5, 3)), #log10 transformed 10^-5 to 10^3
+  levels = 30)
+
+tune_res <- tune_grid( # new function for tuning parameters
+  lasso_wf_tune, # workflow
+  resamples = data_cv10, # cv folds
+  metrics = metric_set(rmse, mae),
+  grid = penalty_grid # penalty grid defined above
+)
+
+# Visualize Model Evaluation Metrics from Tuning
+autoplot(tune_res) + theme_classic()
+
+# Summarize Model Evaluation Metrics (CV)
+collect_metrics(tune_res) %>%
+  filter(.metric == 'rmse') %>% # or choose mae
+  select(penalty, rmse = mean) 
+
+best_penalty <- select_best(tune_res, metric = 'rmse') # choose penalty value based on lowest mae or rmse
+
+# Fit Final Model
+final_wf <- finalize_workflow(lasso_wf_tune, best_penalty) # incorporates penalty value to workflow
+
+final_fit <- fit(final_wf, data = ___)
+
+tidy(final_fit)
+```
+
+<br>
+
+
+<br><br><br>
+
+
+## Exercises {-}
+
+**You can download a template RMarkdown file to start from [here](template_rmds/06-lasso-shrinkage.Rmd).**
+
+We'll use a new data set to explore LASSO modeling. This data comes from the  US Department of Energy. You will predict the fuel efficiency of modern cars from characteristics of these cars, like transmission and engine displacement. Fuel efficiency is a numeric value that ranges smoothly from about 15 to 40 miles per gallon.
+
+```{r}
+library(dplyr)
+library(readr)
+library(broom)
+library(ggplot2)
+library(tidymodels) 
+tidymodels_prefer() # Resolves conflicts, prefers tidymodel functions
+
+set.seed(123)
+
+cars2018 <- read_csv("https://raw.githubusercontent.com/juliasilge/supervised-ML-case-studies-course/master/data/cars2018.csv")
+
+head(cars2018)
+
+# Cleaning
+cars2018 <- cars2018 %>%
+    select(-model_index)
+```
+
+
+### Exercise 1: A least squares model {-}
+
+Let's start by building an ordinary (not penalized) least squares model to review important concepts. We'll fit a model to predict fuel efficiency measured in miles per gallon (`mpg`) with all possible predictors.
+
+```{r}
+lm_spec <-
+    linear_reg() %>% 
+    set_engine(engine = 'lm') %>% 
+    set_mode('regression')
+
+full_rec <- recipe(mpg ~ ., data = cars2018) %>%
+    update_role(model, new_role = 'ID') %>% # we want to keep the name of the car model but not as a predictor or outcome
+    step_nzv(all_predictors()) %>% # removes variables with the same value
+    step_normalize(all_numeric_predictors()) %>% # important standardization step for LASSO
+    step_dummy(all_nominal_predictors())  # creates indicator variables for categorical variables
+
+full_lm_wf <- workflow() %>%
+    add_recipe(full_rec) %>%
+    add_model(lm_spec)
+    
+full_model <- fit(full_lm_wf, data = cars2018) 
+
+full_model %>% tidy()
+```
+
+a. Use `tidymodels` to perform 10-fold cross-validation to estimate test MAE for this model.
+
+```{r}
+cars_cv10 <- vfold_cv(cars2018, 10)
+
+fit_resamples(full_model,
+              resamples = cars_cv10,
+              metrics = metric_set(rmse, rsq, mae)) %>%
+              collect_metrics(summarise = TRUE)
+                
+```
+
+b. How do you think the estimated test error would change with fewer predictors?
+
+The estimated test error would likely increase
+
+c. This model fit with ordinary least squares corresponds to a special case of penalized least squares. What is the value of $\lambda$ in this special case?
+
+It should be 0 because there is no penalizing of the test scores for adding predictors
+
+d. As $\lambda$ increases, what would you expect to happen to the number of predictors that remain in the model?    
+
+It would decrease
+
+<br><br>
+
+
+### Exercise 2: Fitting a LASSO model in `tidymodels` {-}
+
+a. Adapt our general LASSO code above to fit a set of LASSO models with the following parameters:
+
+- Use 10-fold CV.
+- Use mean absolute error (MAE) to select a final model.
+- Select the simplest model for which the metric is within one standard error of the best metric.
+- Use a sequence of 30 $\lambda$ values from 0.001 to 10.
+
+Before running the code, run `install.packages("glmnet")` in the Console.
+
+Save the CV-fit models from `tune_grid()` as `tune_output`.
+
+```{r}
+# Tune and fit a LASSO model to the data (with CV)
+set.seed(74)
+
+# Create CV folds
+data_cv10 <- vfold_cv(cars2018, v = 10)
+
+# Lasso Model Spec with tune
+lm_lasso_spec_tune <- 
+  linear_reg() %>%
+  set_args(mixture = 1, penalty = tune()) %>% ## mixture = 1 indicates Lasso
+  set_engine(engine = 'glmnet') %>% #note we are using a different engine
+  set_mode('regression') 
+
+# Workflow (Recipe + Model)
+lasso_wf_tune <- workflow() %>% 
+  add_recipe(full_rec) %>% # recipe defined above
+  add_model(lm_lasso_spec_tune) 
+
+# Tune Model (trying a variety of values of Lambda penalty)
+penalty_grid <- grid_regular(
+  penalty(range = c(-3, 1)), #log10 transformed 
+  levels = 30)
+
+tune_output <- tune_grid( # new function for tuning parameters
+  lasso_wf_tune, # workflow
+  resamples = data_cv10, # cv folds
+  metrics = metric_set(rmse, mae),
+  grid = penalty_grid # penalty grid defined above
+)
+```
+
+b. Let's visualize the model evaluation metrics from tuning. We can use `autoplot()`.
+
+```{r}
+# Visualize Model Evaluation Metrics from Tuning
+autoplot(tune_output) + theme_classic()
+```
+
+Try replicating that MAE plot with the data below using `ggplot`. Use `scale_x_log10()`. 
+
+```{r}
+metrics_output <- collect_metrics(tune_output) %>%
+  filter(.metric == 'mae') 
+
+metrics_output %>% 
+  ggplot() + # Creates the frame for a plot
+  geom_point(aes(x = .config, y = mean))+
+  geom_smooth(aes(x = .config, y = mean))+
+  theme_classic()
+
+```
+* **CHALLENGE**: Update the plot above to limit the y-axis to only focus on the lowest values of cv MAE.   
+* **CHALLENGE**: Update the plot above to include a horizontal line for the cv MAE that is one standard error from the smallest cv MAE.  
+* **CHALLENGE**: Update the plot above to include vertical lines for the $\lambda$ with the smallest cv RMSE and the largest $\lambda$ with a cv MAE within one SE of the smallest cv MAE.
+
+c. Inspect the shape of the plot. The errors go down at the very beginning then start going back up. Based on this, what are the consequences of picking a $\lambda$ that is too small or too large? (This is an example of a very important idea that we'll see shortly: the **bias-variance tradeoff**.)
+
+d. Next, we need to choose the lambda that leads to the best model. We can choose the lambda penalty value that leads to the lowest cv MAE or we can take into account the variation of the cv MAE and choose the largest lambda penalty value that is within 1 standard error of the lowest cv MAE. How might the models that result from these two penalties differ?
+
+```{r}
+best_penalty <- select_best(tune_output, metric = 'mae') # choose penalty value based on lowest cv mae
+best_penalty
+
+best_se_penalty <- select_by_one_std_err(tune_output, metric = 'mae', desc(penalty)) # choose largest penalty value within 1 se of the lowest cv mae
+best_se_penalty
+```
+
+e. Now check your understanding by fitting both "final" models and comparing the coefficients. How are these two models different?
+
+```{r}
+# Fit Final Model
+
+final_wf <- finalize_workflow(lasso_wf_tune, best_penalty) # incorporates penalty value to workflow
+final_wf_se <- finalize_workflow(lasso_wf_tune, best_se_penalty) # incorporates penalty value to workflow
+
+final_fit <- fit(final_wf, data = cars2018)
+final_fit_se <- fit(final_wf_se, data = cars2018)
+
+tidy(final_fit)
+tidy(final_fit_se)
+```
+The first model uses all of the variables, leading to probable overfitting of the data while the second model tells us to only use some of the variables as predictors, making it much more usable for outside data
+
+<br><br>
+
+
+### Exercise 3: Examining output: plot of coefficient paths {-}
+
+Once we'ved used cross validation, a useful plot allows us to examine **coefficient paths** resulting from the final fitted LASSO models: coefficient estimates as a function of $\lambda$.
+
+Before running the code, run `install.packages("stringr")` and `install.packages("purrr")` in the Console.
+
+```{r}
+glmnet_output <- final_fit_se %>% extract_fit_parsnip() %>% pluck('fit') # get the original glmnet output
+
+lambdas <- glmnet_output$lambda
+coefs_lambdas <- 
+  coefficients(glmnet_output, s = lambdas )  %>% 
+  as.matrix() %>%  
+  t() %>% 
+  as.data.frame() %>% 
+  mutate(lambda = lambdas ) %>% 
+  select(lambda, everything(), -`(Intercept)`) %>% 
+  pivot_longer(cols = -lambda, 
+               names_to = "term", 
+               values_to = "coef") %>%
+  mutate(var = purrr::map_chr(stringr::str_split(term,"_"),~.[1]))
+
+coefs_lambdas %>%
+  ggplot(aes(x = lambda, y = coef, group = term, color = var)) +
+  geom_line() +
+  geom_vline(xintercept = best_se_penalty %>% pull(penalty), linetype = 'dashed') + 
+  theme_classic() + 
+  theme(legend.position = "bottom", legend.text=element_text(size=8))
+```
+
+
+There's a lot of information in this plot!
+
+- Each line corresponds to a different predictor (colors correspond to overall variable).
+- The x-axis reflects the range of different $\lambda$ values.
+- At each $\lambda$, the y-axis reflects the coefficient estimates for the predictors in the corresponding LASSO model.
+- The vertical dashed line shows where the best penalty value (using the SE method) based on cv MAE.
+
+
+<br>
+
+a. Very roughly eyeball the coefficient estimates at the smallest value of $\lambda$. Do they look like they correspond to the coefficient estimates from ordinary least squares in exercise 1?
+
+b. Why do all of the lines head toward y = 0 on the far right of the plot?
+
+c. What variables seem to be more "important" or "persistent" (persistently present in the model) variable? Does this make sense in context?
+
+d. Which predictor seems least "persistent"? In general, how might we use these coefficient paths to measure the predictive importance of our predictors?
+
+**Note:** If you're curious about code to automate this visual inspection of *variable importance*, look at Digging Deeper.
+
+**CHALLENGE** Write a function called `gg_lasso_coefs` that would create this plot automatically if you put in the name of the fit model as an argument.
+
+<br><br>
+
+
+### Exercise 4: Examining and evaluating the best LASSO model {-}
+
+a. Take a look at the predictors and coefficients for the "best" LASSO model. Are the predictors that remain in the model sensible? Do the coefficient signs make sense?   
+
+```{r}
+# Obtain the predictors and coefficients of the "best" model
+# Filter out the coefficient are 0
+final_fit_se %>% tidy() %>% filter(estimate != 0)
+```
+
+b. Evaluate the best LASSO model:
+    - Contextually interpret (with units) the CV MAE error for the best model by inspecting `tune_output %>% collect_metrics() %>% filter(penalty == (best_se_penalty %>% pull(penalty)))`.
+    - Make residual plots for the model by creating a dataset called `lasso_mod_out` which contains the original data as well as predicted values and residuals (`.pred` and `resid`).   
+    
+```{r}
+lasso_mod_out <- final_fit_se %>%
+    predict(new_data = cars2018) %>%
+    bind_cols(cars2018) %>%
+    mutate(resid = mpg - .pred)
+
+
+```
+
+
+<br><br>
+
+
+### Digging deeper {-}
+
+These exercises are recommended for further exploring code useful in an applied analysis.
+
+We used the plot of coefficient paths to evaluate the *variable importance* of our predictors. The code below does this systematically for each predictor so that we don't have to eyeball. Step through and work out what each part is doing. It may help to look up function documentation with `?function_name` in the Console.
+
+```{r}
+    # Create a boolean matrix (predictors x lambdas) of variable exclusion
+    bool_predictor_exclude <- glmnet_output$beta==0
+
+    # Loop over each variable
+    var_imp <- sapply(seq_len(nrow(bool_predictor_exclude)), function(row) {
+        # Extract coefficient path (sorted from highest to lowest lambda)
+        this_coeff_path <- bool_predictor_exclude[row,]
+        # Compute and return the # of lambdas until this variable is out forever
+        ncol(bool_predictor_exclude)-which.min(this_coeff_path) + 1
+    })
+
+    # Create a dataset of this information and sort
+    var_imp_data <- tibble(
+        var_name = rownames(bool_predictor_exclude),
+        var_imp = var_imp
+    )
+    var_imp_data %>% arrange(desc(var_imp))
+```
+
+
+If you want more practice, the `Hitters` data in the `ISLR` package (be sure to to install and load) contains the salaries and performance measures for 322 Major League Baseball players. Use LASSO to determine the "best" predictive model of `Salary`.
+

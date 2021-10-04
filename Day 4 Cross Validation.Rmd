@@ -1,0 +1,189 @@
+```{r 04_setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, eval=FALSE)
+```
+
+# Cross-validation
+
+## Learning Goals {.unnumbered}
+
+-   Inform and justify data analysis and modeling process and the resulting conclusions with clear, organized, logical, and compelling details that adapt to the background, values, and motivations of the audience and context in which communication occurs
+-   Accurately describe all steps of cross-validation to estimate the test/out-of-sample version of a model evaluation metric
+-   Explain what role CV has in a predictive modeling analysis and its connection to overfitting
+-   Explain the pros/cons of higher vs. lower v in v-fold CV in terms of sample size and computing time
+-   Implement cross-validation in R using the `tidymodels` package
+
+<br>
+
+Slides from today are available [here](https://docs.google.com/presentation/d/11BhjA-k3qMOPFnOr4PNXJVb9pNZeUHFtyzyvouDIDig/edit?usp=sharing).
+
+<br><br><br>
+
+## Writing Good Sentences {.unnumbered}
+
+From Chapter 9 of *Communicating with Data*:
+
+> When revising sentences, here are four possible actions you can take:
+
+> **Trim**. Eliminate empty phrases, trim fat phrases, reduce modifiers, and drop redundant adjectives
+
+> **Straighten**. Convert a convoluted sentence into a straightforward one, reorder phrases, and break the sentence into multiple sentences
+
+> **Emphasis**. Order concepts by importances, balance general with specific, and define statistical terms
+
+> **Word choice**. Replace weak nous with concrete ones, passive verbs with active voice, and match the connotation of words with the context of the sentence
+
+### Instructions {.unnumbered}
+
+1.  One person from the group makes a copy of [this document](https://docs.google.com/document/d/1kWGCyKkuFaU2qAxDRowgOzwlol_zWWLa-fwSaHbcFLU/edit?usp=sharing) and then shares that copy with everyone in the group and the instructor.
+2.  Change "editing" (look for the pencil at the top right of document) to "suggesting"
+3.  Each person focuses on one sentence (2,3,8 or 9) in the document to revise.
+4.  Spend 3 minutes working to revise the sentence.
+5.  Rotate to the next sentence and continue revising with the goal of improving the sentences as a group.
+
+<br><br><br>
+
+## Exercises {.unnumbered}
+
+**You can download a template RMarkdown file to start from [here](template_rmds/04-cv.Rmd).**
+
+### Context {.unnumbered}
+
+We'll be working with a dataset containing physical measurements on 80 adult males. These measurements include body fat percentage estimates as well as body circumference measurements.
+
+-   `fatBrozek`: Percent body fat using Brozek's equation: 457/Density - 414.2
+-   `fatSiri`: Percent body fat using Siri's equation: 495/Density - 450
+-   `density`: Density determined from underwater weighing (gm/cm\^3).
+-   `age`: Age (years)
+-   `weight`: Weight (lbs)
+-   `height`: Height (inches)
+-   `neck`: Neck circumference (cm)
+-   `chest`: Chest circumference (cm)
+-   `abdomen`: Abdomen circumference (cm)
+-   `hip`: Hip circumference (cm)
+-   `thigh`: Thigh circumference (cm)
+-   `knee`: Knee circumference (cm)
+-   `ankle`: Ankle circumference (cm)
+-   `biceps`: Biceps (extended) circumference (cm)
+-   `forearm`: Forearm circumference (cm)
+-   `wrist`: Wrist circumference (cm)
+
+It takes a lot of effort to estimate body fat percentage accurately through underwater weighing. The goal is to build the best predictive model for `fatSiri` using just circumference measurements, which are more easily attainable. (We won't use `fatBrozek` or `density` as predictors because they're other outcome variables.)
+
+```{r}
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(tidymodels)
+tidymodels_prefer()
+
+bodyfat_train <- read_csv("https://www.dropbox.com/s/js2gxnazybokbzh/bodyfat_train.csv?dl=1")
+
+# Remove the fatBrozek and density variables
+bodyfat_train <- bodyfat_train %>%
+    select(-fatBrozek, -density, -hipin)
+```
+
+Consider the 4 models you've used before:
+
+```{r}
+lm_spec <-
+    linear_reg() %>% 
+    set_engine(engine = 'lm') %>% 
+    set_mode('regression')
+
+mod1 <- fit(lm_spec,
+            fatSiri ~ age+weight+neck+abdomen+thigh+forearm, 
+            data = bodyfat_train)
+
+mod2 <- fit(lm_spec,
+            fatSiri ~ age+weight+neck+abdomen+thigh+forearm+biceps, 
+            data = bodyfat_train)
+
+mod3 <- fit(lm_spec,
+            fatSiri ~ age+weight+neck+abdomen+thigh+forearm+biceps+chest+hip, 
+            data = bodyfat_train)
+
+mod4 <- fit(lm_spec,
+            fatSiri ~ .,  # The . means all predictors
+            data = bodyfat_train) 
+```
+
+### Exercise 1: Cross-validation in Concept {.unnumbered}
+
+We are going to repeat what we did last week but use cross-validation to help us evaluate models in terms of the predictive performance on "new" data to help us choose a good model.
+
+a.  In pairs or triplets, take turns explaining to each other the steps of cross validation (CV) in concept and then how you might use 10-fold CV with these 80 individual data points.
+
+### Exercise 2: Cross-validation with `tidymodels` {.unnumbered}
+
+a.  Complete the code below to perform 10-fold cross-validation for `mod1` to estimate the test RMSE ($\text{CV}_{(10)}$). Do we need to use `set.seed()`? Why or why not? (Is there a number of folds for which we would not need to set the seed?)
+
+```{r}
+# Do we need to use set.seed()?
+
+bodyfat_cv <- vfold_cv(bodyfat_train, v = 10)
+
+model_wf <- workflow() %>%
+  add_formula(fatSiri ~ age+weight+neck+abdomen+thigh+forearm) %>%
+  add_model(lm_spec)
+
+mod1_cv <- fit_resamples(model_wf,
+  resamples = bodyfat_cv, 
+  metrics = metric_set(rmse, rsq, mae)
+)
+```
+
+b.  Look at `mod1_cv %>% unnest(.metrics)`, and use this to calculate the 10-fold cross-validated RMSE by hand. (Note: We haven't done this together, but how can you adapt code that we've used before?)
+
+```{r}
+mod1_cv %>%
+  unnest(.metrics) %>%
+  filter(.metric == 'rmse') %>%
+  summarise()
+
+(4.1880670+3.9805515+4.8566699+4.6391658+3.1064256+5.3401798+3.1386660+7.0679954+3.4380763+3.7619104)/10	
+
+```
+
+c.  Check your answer to part c by directly printing out the CV metrics: `mod1_cv %>% collect_metrics()`. Interpret this metric.
+
+```{r}
+mod1_cv %>%
+  collect_metrics()
+```
+
+### Exercise 3: Looking at the evaluation metrics {.unnumbered}
+
+Look at the completed table below of evaluation metrics for the 4 models.
+
+a.  Which model performed the best on the training data?
+  Mod 4 performed the best on the training set
+b.  Which model performed best on test set (through CV)?
+  Mod 1 performed the best on the test set
+c.  Explain why there's a discrepancy between these 2 answers and why CV, in general, can help prevent overfitting.
+  This happened because mod4 had a lot more predictor variables in its formula than model 1, and all of the data came from a singular dataset. This resulted in the creation of a very accurate model for the specific dataset, but it became too specific and it makes it less representative of how a completely new set of data may react as a new dataset would have completely different values than the given one. This is describing the concept of overfitting, where a formula with more predictors should usually become more accurate for the specific given dataset, but may be less telling of real world results.
+
+| Model  | Training RMSE | $\text{CV}_{(10)}$ |
+|:-------|:-------------:|:------------------:|
+| `mod1` |   3.810712    |      4.389568      |
+| `mod2` |   3.766645    |      4.438637      |
+| `mod3` |   3.752362    |      4.517281      |
+| `mod4` |   3.572299    |      4.543343      |
+
+### Exercise 4: Practical issues: choosing the number of folds {.unnumbered}
+
+a.  In terms of sample size, what are the pros/cons of low vs. high number of folds?
+  If too few folds are used the data may be underfitted
+b.  In terms of computational time, what are the pros/cons of low vs. high number of folds?
+  The more folds used, the longer the computer will take to compute as it has so many more rounds of testing and rmse's to go through, to calculate the average rmse, but if too few folds are used then the rmse will not be accurate enough as only two groups of data are tested on
+c.  If possible, it is advisable to choose the number of folds to be a divisor of the sample size. Why do you think that is?
+
+### Digging deeper {.unnumbered}
+
+If you have time, consider these exercises to further explore concepts related to today's ideas.
+
+1.  Consider leave-one-out-cross-validation (LOOCV).
+
+    -   Would we need `set.seed()`? Why or why not?
+    -   How might you adapt the code above to implement this?
+    -   Using the information from `your_output %>% unnest(.metrics)` (which is a dataset), construct a visualization to examine the variability of RMSE from case to case. What might explain any very large values? What does this highlight about the quality of estimation of the LOOCV process?
